@@ -1,0 +1,11 @@
+--- sqlite3.c	2015-11-03 03:44:04.000000000 +0900
++++ sqlite3.c	2015-11-18 20:27:18.061148320 +0900
+@@ -30931,7 +30949,7 @@
+     ** with the same permissions.
+     */
+     if( osFstat(pDbFd->h, &sStat) && pInode->bProcessLock==0 ){
+-      rc = SQLITE_IOERR_FSTAT;
++      rc = unixLogError(SQLITE_IOERR_FSTAT, "fstat", pDbFd->zPath);
+       goto shm_open_err;
+     }
+ 
