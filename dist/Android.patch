@@ -1,6 +1,7 @@
-diff -r -u -d orig/shell.c ./shell.c
---- orig/shell.c	2015-11-03 03:44:04.000000000 +0900
-+++ ./shell.c	2015-11-18 20:27:18.043148626 +0900
+diff --git a/dist/shell.c b/dist/shell.c
+index 85e36a8..1d813dc 100644
+--- a/dist/shell.c
++++ b/dist/shell.c
 @@ -52,6 +52,12 @@
  #endif
  #include <ctype.h>
@@ -14,11 +15,10 @@ diff -r -u -d orig/shell.c ./shell.c
  
  #if !defined(_WIN32) && !defined(WIN32)
  # include <signal.h>
-@@ -1943,6 +1949,22 @@
+@@ -2063,6 +2069,21 @@ static void open_db(ShellState *p, int keepAlive){
                              readfileFunc, 0, 0);
      sqlite3_create_function(p->db, "writefile", 2, SQLITE_UTF8, 0,
                              writefileFunc, 0, 0);
-+
 +    // Begin Android Add
 +    #ifndef NO_ANDROID_FUNCS
 +        InitializeIcuOrDie();
@@ -37,15 +37,16 @@ diff -r -u -d orig/shell.c ./shell.c
    }
  }
  
-diff -r -u -d orig/sqlite3.c ./sqlite3.c
---- orig/sqlite3.c	2015-11-03 03:44:04.000000000 +0900
-+++ ./sqlite3.c	2015-11-18 20:27:18.061148320 +0900
-@@ -26470,6 +26470,13 @@
+diff --git a/dist/sqlite3.c b/dist/sqlite3.c
+index 93537eb..934cbe5 100644
+--- a/dist/sqlite3.c
++++ b/dist/sqlite3.c
+@@ -27145,6 +27145,13 @@ SQLITE_PRIVATE const char *sqlite3OpcodeName(int i){
  /* #include "sqliteInt.h" */
  #if SQLITE_OS_UNIX              /* This file is used on unix only */
  
 +/* Use posix_fallocate() if it is available
-+*/
++ */
 +#if !defined(HAVE_POSIX_FALLOCATE) \
 +      && (_XOPEN_SOURCE >= 600 || _POSIX_C_SOURCE >= 200112L)
 +# define HAVE_POSIX_FALLOCATE 1
@@ -54,7 +55,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
  /*
  ** There are various methods for file locking used for concurrency
  ** control:
-@@ -27024,7 +27031,12 @@
+@@ -27689,7 +27696,12 @@ static struct unix_syscall {
  #else
    { "pread64",      (sqlite3_syscall_ptr)0,          0  },
  #endif
@@ -67,7 +68,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
  
    { "write",        (sqlite3_syscall_ptr)write,      0  },
  #define osWrite     ((ssize_t(*)(int,const void*,size_t))aSyscall[11].pCurrent)
-@@ -27042,8 +27054,14 @@
+@@ -27707,8 +27719,14 @@ static struct unix_syscall {
  #else
    { "pwrite64",     (sqlite3_syscall_ptr)0,          0  },
  #endif
@@ -80,9 +81,9 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
                      aSyscall[13].pCurrent)
 +#endif
  
-   { "fchmod",       (sqlite3_syscall_ptr)fchmod,     0  },
+   { "fchmod",       (sqlite3_syscall_ptr)fchmod,          0  },
  #define osFchmod    ((int(*)(int,mode_t))aSyscall[14].pCurrent)
-@@ -30292,7 +30310,7 @@
+@@ -30930,7 +30948,7 @@ static int unixFileSize(sqlite3_file *id, i64 *pSize){
    SimulateIOError( rc=1 );
    if( rc!=0 ){
      storeLastErrno((unixFile*)id, errno);
@@ -91,7 +92,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
    }
    *pSize = buf.st_size;
  
-@@ -30328,7 +30346,7 @@
+@@ -30966,7 +30984,7 @@ static int fcntlSizeHint(unixFile *pFile, i64 nByte){
      struct stat buf;              /* Used to hold return values of fstat() */
     
      if( osFstat(pFile->h, &buf) ){
@@ -100,16 +101,16 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
      }
  
      nSize = ((nByte+pFile->szChunk-1) / pFile->szChunk) * pFile->szChunk;
-@@ -30913,7 +30931,7 @@
+@@ -31540,7 +31558,7 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
      ** with the same permissions.
      */
-     if( osFstat(pDbFd->h, &sStat) && pInode->bProcessLock==0 ){
+     if( osFstat(pDbFd->h, &sStat) ){
 -      rc = SQLITE_IOERR_FSTAT;
 +      rc = unixLogError(SQLITE_IOERR_FSTAT, "fstat", pDbFd->zPath);
        goto shm_open_err;
      }
  
-@@ -32260,7 +32278,7 @@
+@@ -32871,7 +32889,7 @@ static int findCreateFileMode(
        *pUid = sStat.st_uid;
        *pGid = sStat.st_gid;
      }else{
@@ -118,7 +119,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
      }
    }else if( flags & SQLITE_OPEN_DELETEONCLOSE ){
      *pMode = 0600;
-@@ -108046,7 +108064,7 @@
+@@ -109660,7 +109678,7 @@ static int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
    }
    if( pDb->pSchema->file_format>SQLITE_MAX_FILE_FORMAT ){
      sqlite3SetString(pzErrMsg, db, "unsupported file format");
@@ -127,7 +128,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
      goto initone_error_out;
    }
  
-@@ -139786,16 +139804,28 @@
+@@ -141917,16 +141935,28 @@ SQLITE_PRIVATE int sqlite3Fts3Init(sqlite3 *db){
    ** module with sqlite.
    */
    if( SQLITE_OK==rc 
