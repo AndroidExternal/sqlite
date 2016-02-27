@@ -52,12 +52,6 @@
 #endif
 #include <ctype.h>
 #include <stdarg.h>
-// Begin Android Add
-#ifndef NO_ANDROID_FUNCS
-#include "IcuUtils.h"
-#include <sqlite3_android.h>
-#endif
-// End Android Add
 
 #if !defined(_WIN32) && !defined(WIN32)
 # include <signal.h>
@@ -598,6 +592,7 @@ typedef struct ShellState ShellState;
 struct ShellState {
   sqlite3 *db;           /* The database */
   int echoOn;            /* True to echo input commands */
+  int autoExplain;       /* Automatically turn on .explain mode */
   int autoEQP;           /* Run EXPLAIN QUERY PLAN prior to seach SQL stmt */
   int statsOn;           /* True to display memory stats before each finalize */
   int scanstatsOn;       /* True to display scan stats before each finalize */
@@ -609,6 +604,8 @@ struct ShellState {
   FILE *traceOut;        /* Output for sqlite3_trace() */
   int nErr;              /* Number of errors seen */
   int mode;              /* An output mode setting */
+  int cMode;             /* temporary output mode for the current query */
+  int normalMode;        /* Output mode before ".explain on" */
   int writableSchema;    /* True if PRAGMA writable_schema=ON */
   int showHeader;        /* True to show column names in List or Column mode */
   unsigned shellFlgs;    /* Various flags */
@@ -619,7 +616,6 @@ struct ShellState {
   int actualWidth[100];  /* Actual width of each column */
   char nullValue[20];    /* The text to print when a NULL comes back from
                          ** the database */
-  SavedModeInfo normalMode;/* Holds the mode just before .explain ON */
   char outfile[FILENAME_MAX]; /* Filename for *out */
   const char *zDbFilename;    /* name of the database file */
   char *zFreeOnClose;         /* Filename to free when closing */
@@ -888,7 +884,7 @@ static int shell_callback(
   int i;
   ShellState *p = (ShellState*)pArg;
 
-  switch( p->mode ){
+  switch( p->cMode ){
     case MODE_Line: {
       int w = 5;
       if( azArg==0 ) break;
@@ -905,11 +901,24 @@ static int shell_callback(
     }
     case MODE_Explain:
     case MODE_Column: {
+      static const int aExplainWidths[] = {4, 13, 4, 4, 4, 13, 2, 13};
+      const int *colWidth;
+      int showHdr;
+      char *rowSep;
+      if( p->cMode==MODE_Column ){
+        colWidth = p->colWidth;
+        showHdr = p->showHeader;
+        rowSep = p->rowSeparator;
+      }else{
+        colWidth = aExplainWidths;
+        showHdr = 1;
+        rowSep = SEP_Row;
+      }
       if( p->cnt++==0 ){
         for(i=0; i<nArg; i++){
           int w, n;
           if( i<ArraySize(p->colWidth) ){
-            w = p->colWidth[i];
+            w = colWidth[i];
           }else{
             w = 0;
           }
@@ -922,17 +931,17 @@ static int shell_callback(
           if( i<ArraySize(p->actualWidth) ){
             p->actualWidth[i] = w;
           }
-          if( p->showHeader ){
+          if( showHdr ){
             if( w<0 ){
               utf8_printf(p->out,"%*.*s%s",-w,-w,azCol[i],
-                      i==nArg-1 ? p->rowSeparator : "  ");
+                      i==nArg-1 ? rowSep : "  ");
             }else{
               utf8_printf(p->out,"%-*.*s%s",w,w,azCol[i],
-                      i==nArg-1 ? p->rowSeparator : "  ");
+                      i==nArg-1 ? rowSep : "  ");
             }
           }
         }
-        if( p->showHeader ){
+        if( showHdr ){
           for(i=0; i<nArg; i++){
             int w;
             if( i<ArraySize(p->actualWidth) ){
@@ -944,7 +953,7 @@ static int shell_callback(
             utf8_printf(p->out,"%-*.*s%s",w,w,
                    "----------------------------------------------------------"
                    "----------------------------------------------------------",
-                    i==nArg-1 ? p->rowSeparator : "  ");
+                    i==nArg-1 ? rowSep : "  ");
           }
         }
       }
@@ -956,7 +965,7 @@ static int shell_callback(
         }else{
            w = 10;
         }
-        if( p->mode==MODE_Explain && azArg[i] && strlen30(azArg[i])>w ){
+        if( p->cMode==MODE_Explain && azArg[i] && strlen30(azArg[i])>w ){
           w = strlen30(azArg[i]);
         }
         if( i==1 && p->aiIndent && p->pStmt ){
@@ -968,11 +977,11 @@ static int shell_callback(
         if( w<0 ){
           utf8_printf(p->out,"%*.*s%s",-w,-w,
               azArg[i] ? azArg[i] : p->nullValue,
-              i==nArg-1 ? p->rowSeparator : "  ");
+              i==nArg-1 ? rowSep : "  ");
         }else{
           utf8_printf(p->out,"%-*.*s%s",w,w,
               azArg[i] ? azArg[i] : p->nullValue,
-              i==nArg-1 ? p->rowSeparator : "  ");
+              i==nArg-1 ? rowSep : "  ");
         }
       }
       break;
@@ -992,7 +1001,7 @@ static int shell_callback(
         utf8_printf(p->out, "%s", z);
         if( i<nArg-1 ){
           utf8_printf(p->out, "%s", p->colSeparator);
-        }else if( p->mode==MODE_Semi ){
+        }else if( p->cMode==MODE_Semi ){
           utf8_printf(p->out, ";%s", p->rowSeparator);
         }else{
           utf8_printf(p->out, "%s", p->rowSeparator);
@@ -1497,10 +1506,17 @@ static void explain_data_prepare(ShellState *p, sqlite3_stmt *pSql){
 
   /* Try to figure out if this is really an EXPLAIN statement. If this
   ** cannot be verified, return early.  */
+  if( sqlite3_column_count(pSql)!=8 ){
+    p->cMode = p->mode;
+    return;
+  }
   zSql = sqlite3_sql(pSql);
   if( zSql==0 ) return;
   for(z=zSql; *z==' ' || *z=='\t' || *z=='\n' || *z=='\f' || *z=='\r'; z++);
-  if( sqlite3_strnicmp(z, "explain", 7) ) return;
+  if( sqlite3_strnicmp(z, "explain", 7) ){
+    p->cMode = p->mode;
+    return;
+  }
 
   for(iOp=0; SQLITE_ROW==sqlite3_step(pSql); iOp++){
     int i;
@@ -1517,6 +1533,20 @@ static void explain_data_prepare(ShellState *p, sqlite3_stmt *pSql){
 
     /* Grow the p->aiIndent array as required */
     if( iOp>=nAlloc ){
+      if( iOp==0 ){
+        /* Do further verfication that this is explain output.  Abort if
+        ** it is not */
+        static const char *explainCols[] = {
+           "addr", "opcode", "p1", "p2", "p3", "p4", "p5", "comment" };
+        int jj;
+        for(jj=0; jj<ArraySize(explainCols); jj++){
+          if( strcmp(sqlite3_column_name(pSql,jj),explainCols[jj])!=0 ){
+            p->cMode = p->mode;
+            sqlite3_reset(pSql);
+            return;
+          }
+        }
+      }
       nAlloc += 100;
       p->aiIndent = (int*)sqlite3_realloc64(p->aiIndent, nAlloc*sizeof(int));
       abYield = (int*)sqlite3_realloc64(abYield, nAlloc*sizeof(int));
@@ -1620,10 +1650,20 @@ static int shell_exec(
         sqlite3_free(zEQP);
       }
 
-      /* If the shell is currently in ".explain" mode, gather the extra
-      ** data required to add indents to the output.*/
-      if( pArg && pArg->mode==MODE_Explain ){
-        explain_data_prepare(pArg, pStmt);
+      if( pArg ){
+        pArg->cMode = pArg->mode;
+        if( pArg->autoExplain
+         && sqlite3_column_count(pStmt)==8
+         && sqlite3_strlike("%EXPLAIN%", sqlite3_sql(pStmt),0)==0
+        ){
+          pArg->cMode = MODE_Explain;
+        }
+      
+        /* If the shell is currently in ".explain" mode, gather the extra
+        ** data required to add indents to the output.*/
+        if( pArg->cMode==MODE_Explain ){
+          explain_data_prepare(pArg, pStmt);
+        }
       }
 
       /* perform the first step.  this will tell us if we
@@ -1653,7 +1693,7 @@ static int shell_exec(
               /* extract the data and data types */
               for(i=0; i<nCol; i++){
                 aiTypes[i] = x = sqlite3_column_type(pStmt, i);
-                if( x==SQLITE_BLOB && pArg && pArg->mode==MODE_Insert ){
+                if( x==SQLITE_BLOB && pArg && pArg->cMode==MODE_Insert ){
                   azVals[i] = "";
                 }else{
                   azVals[i] = (char*)sqlite3_column_text(pStmt, i);
@@ -1873,8 +1913,7 @@ static char zHelp[] =
   ".echo on|off           Turn command echo on or off\n"
   ".eqp on|off            Enable or disable automatic EXPLAIN QUERY PLAN\n"
   ".exit                  Exit this program\n"
-  ".explain ?on|off?      Turn output mode suitable for EXPLAIN on or off.\n"
-  "                         With no args, it turns EXPLAIN on.\n"
+  ".explain ?on|off|auto? Turn EXPLAIN output mode on or off or to automatic\n"
   ".fullschema            Show schema and the content of sqlite_stat tables\n"
   ".headers on|off        Turn display of headers on or off\n"
   ".help                  Show this message\n"
@@ -1927,6 +1966,7 @@ static char zHelp[] =
   ".timer on|off          Turn SQL timer on or off\n"
   ".trace FILE|off        Output each SQL statement as it is run\n"
   ".vfsinfo ?AUX?         Information about the top-level VFS\n"
+  ".vfslist               List all available VFSes\n"
   ".vfsname ?AUX?         Print the name of the VFS stack\n"
   ".width NUM1 NUM2 ...   Set column widths for \"column\" mode\n"
   "                         Negative values right-justify\n"
@@ -2023,22 +2063,6 @@ static void open_db(ShellState *p, int keepAlive){
                             readfileFunc, 0, 0);
     sqlite3_create_function(p->db, "writefile", 2, SQLITE_UTF8, 0,
                             writefileFunc, 0, 0);
-
-    // Begin Android Add
-    #ifndef NO_ANDROID_FUNCS
-        InitializeIcuOrDie();
-        int err = register_localized_collators(p->db, "en_US", 0);
-        if (err != SQLITE_OK) {
-          fprintf(stderr, "register_localized_collators() failed\n");
-          exit(1);
-        }
-        err = register_android_functions(p->db, 0);
-        if (err != SQLITE_OK) {
-          fprintf(stderr, "register_android_functions() failed\n");
-          exit(1);
-        }
-    #endif
-    // End Android Add
   }
 }
 
@@ -2876,7 +2900,7 @@ static int do_meta_command(char *zLine, ShellState *p){
     open_db(p, 0);
     memcpy(&data, p, sizeof(data));
     data.showHeader = 1;
-    data.mode = MODE_Column;
+    data.cMode = data.mode = MODE_Column;
     data.colWidth[0] = 3;
     data.colWidth[1] = 15;
     data.colWidth[2] = 58;
@@ -2971,37 +2995,24 @@ static int do_meta_command(char *zLine, ShellState *p){
   }else
 
   if( c=='e' && strncmp(azArg[0], "explain", n)==0 ){
-    int val = nArg>=2 ? booleanValue(azArg[1]) : 1;
-    if(val == 1) {
-      if(!p->normalMode.valid) {
-        p->normalMode.valid = 1;
-        p->normalMode.mode = p->mode;
-        p->normalMode.showHeader = p->showHeader;
-        memcpy(p->normalMode.colWidth,p->colWidth,sizeof(p->colWidth));
+    int val = 1;
+    if( nArg>=2 ){
+      if( strcmp(azArg[1],"auto")==0 ){
+        val = 99;
+      }else{
+        val =  booleanValue(azArg[1]);
       }
-      /* We could put this code under the !p->explainValid
-      ** condition so that it does not execute if we are already in
-      ** explain mode. However, always executing it allows us an easy
-      ** was to reset to explain mode in case the user previously
-      ** did an .explain followed by a .width, .mode or .header
-      ** command.
-      */
+    }
+    if( val==1 && p->mode!=MODE_Explain ){
+      p->normalMode = p->mode;
       p->mode = MODE_Explain;
-      p->showHeader = 1;
-      memset(p->colWidth,0,sizeof(p->colWidth));
-      p->colWidth[0] = 4;                  /* addr */
-      p->colWidth[1] = 13;                 /* opcode */
-      p->colWidth[2] = 4;                  /* P1 */
-      p->colWidth[3] = 4;                  /* P2 */
-      p->colWidth[4] = 4;                  /* P3 */
-      p->colWidth[5] = 13;                 /* P4 */
-      p->colWidth[6] = 2;                  /* P5 */
-      p->colWidth[7] = 13;                  /* Comment */
-    }else if (p->normalMode.valid) {
-      p->normalMode.valid = 0;
-      p->mode = p->normalMode.mode;
-      p->showHeader = p->normalMode.showHeader;
-      memcpy(p->colWidth,p->normalMode.colWidth,sizeof(p->colWidth));
+      p->autoExplain = 0;
+    }else if( val==0 ){
+      if( p->mode==MODE_Explain ) p->mode = p->normalMode;
+      p->autoExplain = 0;
+    }else if( val==99 ){
+      if( p->mode==MODE_Explain ) p->mode = p->normalMode;
+      p->autoExplain = 1;
     }
   }else
 
@@ -3017,7 +3028,7 @@ static int do_meta_command(char *zLine, ShellState *p){
     open_db(p, 0);
     memcpy(&data, p, sizeof(data));
     data.showHeader = 0;
-    data.mode = MODE_Semi;
+    data.cMode = data.mode = MODE_Semi;
     rc = sqlite3_exec(p->db,
        "SELECT sql FROM"
        "  (SELECT sql sql, type type, tbl_name tbl_name, name name, rowid x"
@@ -3042,7 +3053,7 @@ static int do_meta_command(char *zLine, ShellState *p){
       raw_printf(p->out, "ANALYZE sqlite_master;\n");
       sqlite3_exec(p->db, "SELECT 'ANALYZE sqlite_master'",
                    callback, &data, &zErrMsg);
-      data.mode = MODE_Insert;
+      data.cMode = data.mode = MODE_Insert;
       data.zDestTable = "sqlite_stat1";
       shell_exec(p->db, "SELECT * FROM sqlite_stat1",
                  shell_callback, &data,&zErrMsg);
@@ -3274,7 +3285,7 @@ static int do_meta_command(char *zLine, ShellState *p){
     open_db(p, 0);
     memcpy(&data, p, sizeof(data));
     data.showHeader = 0;
-    data.mode = MODE_List;
+    data.cMode = data.mode = MODE_List;
     if( nArg==1 ){
       rc = sqlite3_exec(p->db,
         "SELECT name FROM sqlite_master "
@@ -3460,6 +3471,7 @@ static int do_meta_command(char *zLine, ShellState *p){
          "ascii column csv html insert line list tabs tcl\n");
       rc = 1;
     }
+    p->cMode = p->mode;
   }else
 
   if( c=='n' && strncmp(azArg[0], "nullvalue", n)==0 ){
@@ -3649,7 +3661,7 @@ static int do_meta_command(char *zLine, ShellState *p){
     open_db(p, 0);
     memcpy(&data, p, sizeof(data));
     data.showHeader = 0;
-    data.mode = MODE_Semi;
+    data.cMode = data.mode = MODE_Semi;
     if( nArg==2 ){
       int i;
       for(i=0; azArg[1][i]; i++) azArg[1][i] = ToLower(azArg[1][i]);
@@ -3797,7 +3809,8 @@ static int do_meta_command(char *zLine, ShellState *p){
     }
     utf8_printf(p->out, "%12.12s: %s\n","echo", p->echoOn ? "on" : "off");
     utf8_printf(p->out, "%12.12s: %s\n","eqp", p->autoEQP ? "on" : "off");
-    utf8_printf(p->out,"%9.9s: %s\n","explain",p->normalMode.valid?"on":"off");
+    utf8_printf(p->out, "%12.12s: %s\n","explain",
+         p->mode==MODE_Explain ? "on" : p->autoExplain ? "auto" : "off");
     utf8_printf(p->out,"%12.12s: %s\n","headers", p->showHeader ? "on" : "off");
     utf8_printf(p->out, "%12.12s: %s\n","mode", modeDescr[p->mode]);
     utf8_printf(p->out, "%12.12s: ", "nullvalue");
@@ -4192,6 +4205,24 @@ static int do_meta_command(char *zLine, ShellState *p){
     }
   }else
 
+  if( c=='v' && strncmp(azArg[0], "vfslist", n)==0 ){
+    sqlite3_vfs *pVfs;
+    sqlite3_vfs *pCurrent = 0;
+    if( p->db ){
+      sqlite3_file_control(p->db, "main", SQLITE_FCNTL_VFS_POINTER, &pCurrent);
+    }
+    for(pVfs=sqlite3_vfs_find(0); pVfs; pVfs=pVfs->pNext){
+      utf8_printf(p->out, "vfs.zName      = \"%s\"%s\n", pVfs->zName,
+           pVfs==pCurrent ? "  <--- CURRENT" : "");
+      raw_printf(p->out, "vfs.iVersion   = %d\n", pVfs->iVersion);
+      raw_printf(p->out, "vfs.szOsFile   = %d\n", pVfs->szOsFile);
+      raw_printf(p->out, "vfs.mxPathname = %d\n", pVfs->mxPathname);
+      if( pVfs->pNext ){
+        raw_printf(p->out, "-----------------------------------\n");
+      }
+    }
+  }else
+
   if( c=='v' && strncmp(azArg[0], "vfsname", n)==0 ){
     const char *zDbName = nArg==2 ? azArg[1] : "main";
     char *zVfsName = 0;
@@ -4578,7 +4609,8 @@ static void usage(int showDetail){
 */
 static void main_init(ShellState *data) {
   memset(data, 0, sizeof(*data));
-  data->mode = MODE_List;
+  data->normalMode = data->cMode = data->mode = MODE_List;
+  data->autoExplain = 1;
   memcpy(data->colSeparator,SEP_Column, 2);
   memcpy(data->rowSeparator,SEP_Row, 2);
   data->showHeader = 0;
@@ -4911,6 +4943,7 @@ int SQLITE_CDECL main(int argc, char **argv){
       raw_printf(stderr,"Use -help for a list of options.\n");
       return 1;
     }
+    data.cMode = data.mode;
   }
 
   if( !readStdin ){
