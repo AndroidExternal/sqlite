@@ -10,7 +10,7 @@ LOCAL_PATH:= $(call my-dir)
 #   SQLITE_TEMP_STORE=3 causes all TEMP files to go into RAM. and thats the behavior we want
 #   SQLITE_ENABLE_FTS3   enables usage of FTS3 - NOT FTS1 or 2.
 #   SQLITE_DEFAULT_AUTOVACUUM=1  causes the databases to be subject to auto-vacuum
-common_sqlite_flags := \
+minimal_sqlite_flags := \
 	-DNDEBUG=1 \
 	-DHAVE_USLEEP=1 \
 	-DSQLITE_HAVE_ISNAN \
@@ -28,16 +28,18 @@ common_sqlite_flags := \
 	-DSQLITE_OMIT_COMPILEOPTION_DIAGS \
 	-DSQLITE_OMIT_LOAD_EXTENSION \
 	-DSQLITE_DEFAULT_FILE_PERMISSIONS=0600 \
+	-DSQLITE_SECURE_DELETE \
 	-Dfdatasync=fdatasync
 
-device_sqlite_flags := $(common_sqlite_flags) \
+minimal_linux_flags := \
+    -DHAVE_POSIX_FALLOCATE=1 \
+
+device_sqlite_flags := $(minimal_sqlite_flags) \
     -DSQLITE_ENABLE_ICU \
     -DUSE_PREAD64 \
     -Dfdatasync=fdatasync \
     -DHAVE_MALLOC_H=1 \
     -DHAVE_MALLOC_USABLE_SIZE
-
-host_sqlite_flags := $(common_sqlite_flags)
 
 common_src_files := sqlite3.c
 
@@ -47,6 +49,7 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES := $(common_src_files)
 
 LOCAL_CFLAGS += $(device_sqlite_flags)
+LOCAL_CFLAGS_linux += $(minimal_linux_flags)
 
 LOCAL_SHARED_LIBRARIES := libdl
 
@@ -69,7 +72,8 @@ include $(BUILD_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_SRC_FILES := $(common_src_files)
 LOCAL_LDLIBS += -lpthread -ldl
-LOCAL_CFLAGS += $(host_sqlite_flags)
+LOCAL_CFLAGS += $(minimal_sqlite_flags)
+LOCAL_CFLAGS_linux += $(minimal_linux_flags)
 LOCAL_MODULE:= libsqlite
 LOCAL_SHARED_LIBRARIES += libicuuc-host libicui18n-host
 LOCAL_STATIC_LIBRARIES := liblog libutils libcutils
@@ -102,6 +106,7 @@ LOCAL_SHARED_LIBRARIES := libsqlite \
 LOCAL_STATIC_LIBRARIES := libicuandroid_utils
 
 LOCAL_CFLAGS += $(device_sqlite_flags)
+LOCAL_CFLAGS_linux += $(minimal_linux_flags)
 
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 
@@ -123,19 +128,37 @@ endif # !SDK_ONLY
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := $(common_src_files) shell.c
-LOCAL_CFLAGS += $(host_sqlite_flags) \
+LOCAL_CFLAGS += $(minimal_sqlite_flags) \
     -DNO_ANDROID_FUNCS=1
+LOCAL_CFLAGS_linux += $(minimal_linux_flags)
 
 # sqlite3MemsysAlarm uses LOG()
 LOCAL_STATIC_LIBRARIES += liblog
 
-ifeq ($(strip $(USE_MINGW)),)
-LOCAL_LDLIBS += -lpthread
-ifneq ($(HOST_OS),freebsd)
-LOCAL_LDLIBS += -ldl
-endif
-endif
+LOCAL_LDLIBS_darwin += -lpthread -ldl
+LOCAL_LDLIBS_linux += -lpthread -ldl
+
+LOCAL_MODULE_HOST_OS := darwin linux windows
 
 LOCAL_MODULE := sqlite3
 
 include $(BUILD_HOST_EXECUTABLE)
+
+# Build a minimal version of sqlite3 without any android specific
+# features against the NDK. This is used by libcore's JDBC related
+# unit tests.
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES := $(common_src_files)
+LOCAL_CFLAGS += $(minimal_sqlite_flags)
+LOCAL_CFLAGS_linux += $(minimal_linux_flags)
+LOCAL_MODULE:= libsqlite_static_minimal
+LOCAL_SDK_VERSION := 23
+include $(BUILD_STATIC_LIBRARY)
+
+# Same as libsqlite_static_minimal, except that this is for the host.
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES := $(common_src_files)
+LOCAL_CFLAGS += $(minimal_sqlite_flags)
+LOCAL_CFLAGS_linux += $(minimal_linux_flags)
+LOCAL_MODULE:= libsqlite_static_minimal
+include $(BUILD_HOST_STATIC_LIBRARY)
