@@ -1,6 +1,6 @@
 diff -r -u -d orig/shell.c ./shell.c
---- orig/shell.c	2016-08-11 12:17:06.000000000 -0700
-+++ ./shell.c	2016-08-08 19:00:23.378843544 -0700
+--- orig/shell.c	2016-09-12 12:11:10.000000000 -0700
++++ ./shell.c	2016-09-13 15:55:16.638952571 -0700
 @@ -53,6 +53,13 @@
  #include <ctype.h>
  #include <stdarg.h>
@@ -36,3 +36,61 @@ diff -r -u -d orig/shell.c ./shell.c
    }
  }
  
+diff -r -u -d orig/sqlite3.c ./sqlite3.c
+--- orig/sqlite3.c	2016-09-12 12:11:10.000000000 -0700
++++ ./sqlite3.c	2016-09-13 16:16:32.182336432 -0700
+@@ -49790,15 +49790,9 @@
+   unsigned pgFlags      /* Various flags */
+ ){
+   unsigned level = pgFlags & PAGER_SYNCHRONOUS_MASK;
+-  if( pPager->tempFile ){
+-    pPager->noSync = 1;
+-    pPager->fullSync = 0;
+-    pPager->extraSync = 0;
+-  }else{
+-    pPager->noSync =  level==PAGER_SYNCHRONOUS_OFF ?1:0;
+-    pPager->fullSync = level>=PAGER_SYNCHRONOUS_FULL ?1:0;
+-    pPager->extraSync = level==PAGER_SYNCHRONOUS_EXTRA ?1:0;
+-  }
++  pPager->noSync =  1;
++  pPager->fullSync = 0;
++  pPager->extraSync = 0;
+   if( pPager->noSync ){
+     pPager->syncFlags = 0;
+     pPager->ckptSyncFlags = 0;
+@@ -51094,20 +51088,12 @@
+   pPager->memDb = (u8)memDb;
+   pPager->readOnly = (u8)readOnly;
+   assert( useJournal || pPager->tempFile );
+-  pPager->noSync = pPager->tempFile;
+-  if( pPager->noSync ){
+-    assert( pPager->fullSync==0 );
+-    assert( pPager->extraSync==0 );
+-    assert( pPager->syncFlags==0 );
+-    assert( pPager->walSyncFlags==0 );
+-    assert( pPager->ckptSyncFlags==0 );
+-  }else{
+-    pPager->fullSync = 1;
+-    pPager->extraSync = 0;
+-    pPager->syncFlags = SQLITE_SYNC_NORMAL;
+-    pPager->walSyncFlags = SQLITE_SYNC_NORMAL | WAL_SYNC_TRANSACTIONS;
+-    pPager->ckptSyncFlags = SQLITE_SYNC_NORMAL;
+-  }
++  pPager->noSync = 1;
++  assert( pPager->fullSync==0 );
++  assert( pPager->extraSync==0 );
++  assert( pPager->syncFlags==0 );
++  assert( pPager->walSyncFlags==0 );
++  assert( pPager->ckptSyncFlags==0 );
+   /* pPager->pFirst = 0; */
+   /* pPager->pFirstSynced = 0; */
+   /* pPager->pLast = 0; */
+@@ -96709,7 +96695,7 @@
+ #endif
+     sqlite3BtreeLeave(aNew->pBt);
+   }
+-  aNew->safety_level = SQLITE_DEFAULT_SYNCHRONOUS+1;
++  aNew->safety_level = 1;
+   aNew->zName = sqlite3DbStrDup(db, zName);
+   if( rc==SQLITE_OK && aNew->zName==0 ){
+     rc = SQLITE_NOMEM_BKPT;
