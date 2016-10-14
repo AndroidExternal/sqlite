@@ -1,6 +1,6 @@
 diff -r -u -d orig/shell.c ./shell.c
---- orig/shell.c	2016-09-12 12:11:10.000000000 -0700
-+++ ./shell.c	2016-09-13 15:55:16.638952571 -0700
++--- orig/shell.c       2016-10-14 04:48:16.000000000 -0700
+++++ ./shell.c  2016-10-14 13:50:02.772901175 -0700
 @@ -53,6 +53,13 @@
  #include <ctype.h>
  #include <stdarg.h>
@@ -15,7 +15,7 @@ diff -r -u -d orig/shell.c ./shell.c
  #if !defined(_WIN32) && !defined(WIN32)
  # include <signal.h>
  # if !defined(__RTP__) && !defined(_WRS_KERNEL)
-@@ -2368,6 +2375,20 @@
+@@ -2395,6 +2402,20 @@
                              readfileFunc, 0, 0);
      sqlite3_create_function(p->db, "writefile", 2, SQLITE_UTF8, 0,
                              writefileFunc, 0, 0);
@@ -37,9 +37,9 @@ diff -r -u -d orig/shell.c ./shell.c
  }
  
 diff -r -u -d orig/sqlite3.c ./sqlite3.c
---- orig/sqlite3.c	2016-09-12 12:11:10.000000000 -0700
-+++ ./sqlite3.c	2016-09-13 16:16:32.182336432 -0700
-@@ -49790,15 +49790,9 @@
++--- orig/sqlite3.c     2016-10-14 04:48:16.000000000 -0700
+++++ ./sqlite3.c        2016-10-14 14:14:22.872902968 -0700
++@@ -49862,15 +49862,9 @@
    unsigned pgFlags      /* Various flags */
  ){
    unsigned level = pgFlags & PAGER_SYNCHRONOUS_MASK;
@@ -58,7 +58,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
    if( pPager->noSync ){
      pPager->syncFlags = 0;
      pPager->ckptSyncFlags = 0;
-@@ -51094,20 +51088,12 @@
+@@ -51167,19 +51161,12 @@
    pPager->memDb = (u8)memDb;
    pPager->readOnly = (u8)readOnly;
    assert( useJournal || pPager->tempFile );
@@ -85,7 +85,7 @@ diff -r -u -d orig/sqlite3.c ./sqlite3.c
    /* pPager->pFirst = 0; */
    /* pPager->pFirstSynced = 0; */
    /* pPager->pLast = 0; */
-@@ -96709,7 +96695,7 @@
+@@ -97578,7 +97565,7 @@
  #endif
      sqlite3BtreeLeave(aNew->pBt);
    }
